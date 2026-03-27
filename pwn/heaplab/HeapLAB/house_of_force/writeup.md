@@ -10,7 +10,7 @@ Trong bài viết này, mình sẽ giải thích những vấn đề bao gồm:
 
 - Nếu như chúng ta đã có 1 primitive mạnh, ta nên ghi đè giá trị quan trọng nào để `drop the shell`?
 
-### Fastbins(2.28-no-tcache) check những gì?
+### Fastbins(2.28-no-tcache) check những gì và bài này đã lợi dụng việc fastbins không check gì?
 ```
  if ((unsigned long) (nb) <= (unsigned long) (get_max_fast ()))
     {
