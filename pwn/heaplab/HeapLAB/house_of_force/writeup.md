@@ -27,21 +27,32 @@ Trong bài viết này, mình sẽ giải thích những vấn đề bao gồm:
 
 - Tạm bỏ qua việc khai thác lỗ hổng, ta tập trung vào việc chứng minh rằng bug này có thể thực hiện được arbitary write và thử sử dụng nó để ghi đè giá trị `target` ở `0x602010`.
 
+
 ![alt text](image-1.png)
 
-- Đầu tiên, ta ghi đè top chunk bằng 1 giá trị cực lớn(ví dụ 0xffffffffffffffff):
- ![alt text](image.png)
 
- Từ đây, ta có thể khiến chương trình nghĩ rằng heap chiếm 1 bộ nhớ rất lớn, từ đó ta có thể ghi đè bất kỳ địa chỉ nào, kể cả những địa chỉ quan trọng, khi sử dụng lệnh `vis` trong pwndbg, ta biết rằng chương trình đã coi giá trị cực lớn này như 1 top chunk hợp lệ:
+- Đầu tiên, ta ghi đè top chunk bằng 1 giá trị cực lớn(ví dụ 0xffffffffffffffff)
+
+
+![alt text](image.png)
+
+
+- Từ đây, ta có thể khiến chương trình nghĩ rằng heap chiếm 1 bộ nhớ rất lớn, từ đó ta có thể ghi đè bất kỳ địa chỉ nào, kể cả những địa chỉ quan trọng, khi sử dụng lệnh `vis` trong pwndbg, ta biết rằng chương trình đã coi giá trị cực lớn này như 1 top chunk hợp lệ:
+
 
 ![alt text](image-2.png)
+
 
 - Nhưng địa chỉ của heap là `0x603000` trong khi địa chỉ của target là `602010`, vậy làm sao 1 buffer ở địa chỉ cao hơn có thể ghi đè được địa chỉ thấp hơn?
 (Lần sau cần phải trả lời câu hỏi)
 
 Ta có công thức:
+
+```python
 def delta(x, y):
     return (0xffffffffffffffff - x) + y
+```
+
 
 ![alt text](image-3.png)
 
@@ -49,18 +60,28 @@ def delta(x, y):
 
 - Trước hết, ta phải hiểu rằng ta sẽ tính distance từ chunk tiếp theo tới địa chỉ cần ghi đè, chunk tiếp theo chính là bắt đầu từ top chunk, chính là chunk hiện tại + 0x20:
 
+
 ![alt text](image-4.png)
 
+
 - Để hiểu rõ hơn, ta cần debug cụ thể, có thể thấy, sau khi ta malloc 1 chunk cực lớn, hiện tượng này đã xảy ra:
+
 
 ![alt text](image-5.png)
 
 size của chunk tiếp theo, giờ chứa khoảng cách từ chunk hiện tại tới target-0x20, chính là 0xffffffffffffefe1, có thể thấy, ta đã thu hẹp khoảng cách, và giờ đây, chunk tiếp theo mà ta có thể malloc để trực tiếp ghi đè chính là target:
 
+
 ![alt text](image-6.png)
+
+
 cuối cùng là ghi đè giá trị target:
+
+
 ![alt text](image-8.png)
-payload cuối chứng mình primitive cuối:
+
+
+payload cuối chứng minh primitive cuối:
 
 ```python
 # =============================================================================
@@ -99,6 +120,7 @@ malloc(24, b"Much win")
 
 
 payload cuối cùng:
+
 ```python
 # Request a chunk; overflow its user data and overwrite the top chunk's size field with a large value.
 # Write a "/bin/sh" string here if not using the one in libc.
