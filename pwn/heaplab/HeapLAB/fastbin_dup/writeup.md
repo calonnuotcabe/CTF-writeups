@@ -16,6 +16,8 @@ Trong bài viết này, mình sẽ giải thích những vấn đề bao gồm:
 
 #### I. Fastbins là gì
 
+- Fastbins là 1 bins 
+
 #### II. Behavior bình thường của fastbin
 - Trước hết, ta sẽ xem cách chương trình này hoạt động 1 cách bình thường:
 
@@ -41,7 +43,24 @@ Lần này, ta thử lại primitive top chunk corruption, nhưng lần này, ch
 
 
 ### Primitive Discovery
+- Trước hết, ta sẽ chứng minh rằng lỗi double-free này có thể được chuyển thành 1 primitive mạnh, ở đây, là chuyển thành arbitary write primitive. Vậy nên, ta sẽ tìm cách ghi đè giá trị target 
+- Đầu tiên, ta sẽ `malloc` 2 chunk,  sau đó trigger lỗi double free:
+```
+chunk_A = malloc(0x20, b"huhu")
+chunk_B = malloc(0x20, b"hehe")
 
+free(chunk_A)
+free(chunk_B)
+free(chunk_A)
+```
+khi đó, fastbins list sẽ:
+`0x20: 0x603000 -> 0x603020 <- 0x603000` 
+
+![alt text](image-7.png)
+
+Vậy nếu lần này ta `malloc` 1 lần nữa, ta sẽ sử dụng chunk có metadata tại `0x603000` và sử dụng meta-data + 0x10 làm user-data, tuy nhiên, là vì chunk tại `0x603000` vẫn có ở trong fastbins nên user-data ta ghi vào sẽ được dùng làm con trỏ.
+
+![alt text](image-5.png)
 
 - Script test chứng minh primitive(arbitary write):
 ```

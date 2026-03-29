@@ -2,116 +2,107 @@
 >Glibc ver: 2.28
 Trong bài viết này, mình sẽ giải thích những vấn đề bao gồm:
 
-- Fastbins(2.28) check những gì?
+- Top chunk hoạt động ra sao?
 
 - Bug ở đâu?
 
-- Làm sao để ta chuyển bug đó thành 1 primitive arbitary write?
+- Làm sao để ta chuyển bug đó thành 1 primitive arbitrary write?
+
+- Tại sao công thức `delta()` lại hoạt động?
 
 - Nếu như chúng ta đã có 1 primitive mạnh, ta nên ghi đè giá trị quan trọng nào để `drop the shell`?
 
-### Fastbins(2.28-no-tcache) check những gì và bài này đã lợi dụng việc fastbins không check gì?
-```
- if ((unsigned long) (nb) <= (unsigned long) (get_max_fast ()))
-    {
-      idx = fastbin_index (nb);
-      mfastbinptr *fb = &fastbin (av, idx);
-      mchunkptr pp = *fb;
-      do
-        {
-          victim = pp;
-          if (victim == NULL)
-            break;
-        }
-      while ((pp = catomic_compare_and_exchange_val_acq (fb, victim->fd, victim))
-             != victim);
-      if (victim != 0)
-        {
-          if (__builtin_expect (fastbin_index (chunksize (victim)) != idx, 0))
-            {
-              errstr = "malloc(): memory corruption (fast)";
-            errout:
-              malloc_printerr (check_action, errstr, chunk2mem (victim), av);
-              return NULL;
-            }
-          check_remalloced_chunk (av, victim, nb);
-          void *p = chunk2mem (victim);
-          alloc_perturb (p, bytes);
-          return p;
-        }
-    }
-```
-fastbins check:
-fastbins không check:
+### Top chunk(2.28-no-tcache) check những gì và bài này đã lợi dụng việc allocator không check gì?
+
+- Khác với những kỹ thuật xoay quanh `fastbin` hay `tcache`, `House of Force` làm việc trực tiếp với `top chunk`, tức phần vùng nhớ còn lại của heap mà allocator chưa cấp phát.
+
+- Khi `malloc()` lấy bộ nhớ từ `top chunk`, điều quan trọng nhất mà allocator quan tâm là: `size(top) >= nb + MINSIZE`. Nếu điều kiện này đúng thì nó sẽ cắt `top chunk` ra, trả 1 chunk cho user, rồi đẩy `top` tiến lên phía trước.
+
+- Nói ngắn gọn, allocator có check rằng top chunk hiện tại có đủ lớn để phục vụ request lần này.
+
+- Nhưng allocator không thực sự xác minh rằng cái `size` đang nằm trong top chunk có còn đáng tin nữa hay không. Một khi ta có thể overflow vào trường `size` này và biến nó thành 1 giá trị cực lớn, `_int_malloc` sẽ tin giá trị đó là thật và tiếp tục split top chunk như bình thường.
+
+- Và đó chính là thứ mà `House of Force` lợi dụng: không phải `malloc` cho ta arbitrary write ngay lập tức, mà là ta lừa allocator dời `top` tới gần địa chỉ cần ghi đè, rồi dùng lần `malloc` kế tiếp để ghi trực tiếp vào mục tiêu.
 
 ### Bug Class - Heap OverFlow
 
 - I/O cơ bản của chương trình:
- ta có thể malloc 1 giá trị bất kỳ, chương trình dùng size đó dùng để chứa cả metadata và user-data, giá trị này bắt buộc phải lớn hơn hoặc bằng 0x20, nhỏ hơn giá trị mà top_chunk đang chứa.
+ta có thể chọn `malloc`, nhập `size`, và chương trình sẽ cấp phát 1 chunk với size đó.
 
-- Nếu như ta claim size chúng ta nhập vào nhỏ hơn so với input của chúng ta nhập vào, chúng ta nhận thấy input của ta đã ghi đè vào những giá trị quan trọng trong chương trình... Và một trong những giá trị quan trọng nhất trong heap layout chính là top chunk, hay chính là phần vùng nhớ còn lại mà heap chưa sử dụng. Vì vậy, nếu ta ghi đè vào giá trị này, ta có thể khiến chương trình "hiểu nhầm rằng vùng nhớ heap rất lớn" dẫn tới `malloc` có thể ghi đè lên những segment quan trọng khác.
+- Điểm đáng chú ý nằm ở chỗ nhập `data`: chương trình không chỉ đọc `malloc_usable_size(ptr)` byte, mà nó đọc tới `malloc_usable_size(ptr) + 8`.
+
+- Đây là bug rất quan trọng. Ví dụ, khi ta request `24`, glibc của bài này cho ta đúng `24` byte usable size, nhưng chương trình lại đọc `32` byte. 8 byte dư ra này không rơi vào khoảng trống vô hại nào cả, mà nó đè thẳng vào `size field` của top chunk nằm ngay sau chunk hiện tại.
+
+- Vì vậy, bug ở đây là 1 `heap overflow` rất clean: chỉ với 1 request nhỏ, ta đã có thể sửa metadata quan trọng nhất của allocator, đó là `top chunk size`.
 
 ### Primitive Discovery
 
 - Vậy làm sao từ bug này, ta có thể chuyển nó thành 1 primitive mạnh?
 
-- Tạm bỏ qua việc khai thác lỗ hổng, ta tập trung vào việc chứng minh rằng bug này có thể thực hiện được arbitary write và thử sử dụng nó để ghi đè giá trị `target` ở `0x602010`.
+- Tạm bỏ qua việc khai thác lỗ hổng, ta tập trung vào việc chứng minh rằng bug này có thể thực hiện được arbitrary write và thử sử dụng nó để ghi đè giá trị `target` ở `0x602010`.
 
 
 ![alt text](image-1.png)
 
 
-- Đầu tiên, ta ghi đè top chunk bằng 1 giá trị cực lớn(ví dụ 0xffffffffffffffff)
+- Đầu tiên, ta ghi đè top chunk bằng 1 giá trị cực lớn, ví dụ `0xffffffffffffffff`.
 
 
 ![alt text](image.png)
 
 
-- Từ đây, ta có thể khiến chương trình nghĩ rằng heap chiếm 1 bộ nhớ rất lớn, từ đó ta có thể ghi đè bất kỳ địa chỉ nào, kể cả những địa chỉ quan trọng, khi sử dụng lệnh `vis` trong pwndbg, ta biết rằng chương trình đã coi giá trị cực lớn này như 1 top chunk hợp lệ:
+- Từ đây, ta có thể khiến chương trình tin rằng phần heap còn lại là cực lớn. Một khi allocator đã tin size giả này, ta có thể dùng 1 request rất to để kéo `top` tới gần bất kỳ địa chỉ nào mình muốn. Khi sử dụng lệnh `vis` trong pwndbg, ta thấy rằng chương trình thực sự đã coi giá trị cực lớn này như 1 top chunk hợp lệ:
 
 
 ![alt text](image-2.png)
 
 
-- Nhưng địa chỉ của heap là `0x603000` trong khi địa chỉ của target là `602010`, vậy làm sao 1 buffer ở địa chỉ cao hơn có thể ghi đè được địa chỉ thấp hơn?
-(Lần sau cần phải trả lời câu hỏi)
+- Nhưng địa chỉ của heap là `0x603000` trong khi địa chỉ của target là `0x602010`, vậy làm sao 1 buffer ở địa chỉ cao hơn có thể ghi đè được 1 địa chỉ thấp hơn?
 
-Ta có công thức:
+- Câu trả lời nằm ở wrap-around của không gian địa chỉ 64-bit. `malloc` sẽ đẩy `top` đi bằng 1 phép cộng trên số unsigned. Nếu request đủ lớn, phép cộng này sẽ tràn qua `0xffffffffffffffff` rồi "quấn vòng" về những địa chỉ thấp hơn. Vì vậy, dù `target` nằm thấp hơn heap, ta vẫn có thể kéo `top` quay ngược xuống đó.
+
+- Ta có công thức:
 
 ```python
 def delta(x, y):
     return (0xffffffffffffffff - x) + y
 ```
 
+- `delta(x, y)` chính là khoảng cách wrap-around từ địa chỉ `x` tới địa chỉ `y` trong không gian địa chỉ 64-bit.
+
 
 ![alt text](image-3.png)
 
-- Tại sao lại là distance giữa heap+0x20 và target - 0x20?
 
-- Trước hết, ta phải hiểu rằng ta sẽ tính distance từ chunk tiếp theo tới địa chỉ cần ghi đè, chunk tiếp theo chính là bắt đầu từ top chunk, chính là chunk hiện tại + 0x20:
+- Tại sao lại là distance giữa `heap + 0x20` và `target - 0x20`?
+
+- Vì ta không nhắm trực tiếp vào `target`, mà nhắm vào vị trí của `top chunk` sau lần `malloc` cực lớn. Sau lần `malloc` đó, ta muốn lần `malloc(24, data)` kế tiếp trả về 1 buffer mà qword đầu tiên của user-data đè đúng lên `target`. Trong layout của bài này, điều đó tương đương với việc kéo `top` tới `target - 0x20`.
+
+- Nói cách khác, cái ta đang tính không phải là "khoảng cách từ chunk hiện tại tới target", mà là "khoảng cách wrap-around từ top chunk hiện tại tới vị trí mà top chunk mới cần đứng".
 
 
 ![alt text](image-4.png)
 
 
-- Để hiểu rõ hơn, ta cần debug cụ thể, có thể thấy, sau khi ta malloc 1 chunk cực lớn, hiện tượng này đã xảy ra:
+- Để hiểu rõ hơn, ta cần debug cụ thể. Có thể thấy, sau khi ta `malloc` 1 chunk cực lớn, hiện tượng này đã xảy ra:
 
 
 ![alt text](image-5.png)
 
-size của chunk tiếp theo, giờ chứa khoảng cách từ chunk hiện tại tới target-0x20, chính là 0xffffffffffffefe1, có thể thấy, ta đã thu hẹp khoảng cách, và giờ đây, chunk tiếp theo mà ta có thể malloc để trực tiếp ghi đè chính là target:
+
+- Lúc này, khoảng cách từ top chunk mới tới target đã bị rút ngắn đúng như ta mong muốn, và chunk tiếp theo mà ta có thể `malloc` ra sẽ trực tiếp overlap với `target`:
 
 
 ![alt text](image-6.png)
 
 
-cuối cùng là ghi đè giá trị target:
+- Cuối cùng là ghi đè giá trị `target`:
 
 
 ![alt text](image-8.png)
 
 
-payload cuối chứng minh primitive cuối:
+- Payload cuối chứng minh primitive:
 
 ```python
 # =============================================================================
@@ -129,29 +120,30 @@ malloc(24, b"Much win")
 
 # =============================================================================
 ```
+
 ### Exploitation
 
 - Vậy làm sao để ta có thể sử dụng cái primitive này để khai thác chương trình?
 
-=> Ta phải dùng primitive này để ghi đè vào 1 địa chỉ quan trọng trong chương trình từ đó, thay đổi CFG theo ý chúng ta, tuy vậy, ta nên ghi đè vào giá trị nào?
+=> Ta phải dùng primitive này để ghi đè vào 1 địa chỉ quan trọng trong chương trình, từ đó thay đổi CFG theo ý chúng ta. Tuy vậy, ta nên ghi đè vào giá trị nào?
 
-- Ta có thể ghi đè vào các địa chỉ quan trọng ở stack, và ta nghĩ ngay tới retaddr hoặc là *fp, nhưng vì stack thuộc aslr region và ta không thể leak, nên ta sẽ loại trừ phương án stack.
+- Ta có thể ghi đè vào các địa chỉ quan trọng ở stack, và ta nghĩ ngay tới `retaddr` hoặc là các function pointer trên stack. Nhưng vì stack thuộc ASLR region và ta không có leak stack, nên ta sẽ loại trừ phương án này.
 
-- Chúng ta cũng có thể target các địa chỉ ở binary, khi nghĩ tới `code execute`, ta sẽ nghĩ tới ghi đè các entry trong `plt` thông qua lazy binding, cũng là 1 cách hay để điều khiển luồng chương trình. Hoặc là ta có thể ghi đè `__fini_array`, vốn là 1 mảng gồm các con trỏ hàm. Mỗi hàm trong `__fini_array` sẽ được gọi khi chương trình thoát, nên ta có thể ép chương trình thoát để chiếm luồng thực thi. Tuy nhiên, vì RELRO được bật `full` nên những vùng này sẽ là `r-only` , nên ta sẽ loại trừ phương án này.
+- Chúng ta cũng có thể target các địa chỉ ở binary. Khi nghĩ tới `code execution`, ta sẽ nghĩ tới `GOT` hoặc `__fini_array`. `__fini_array` là 1 mảng gồm các con trỏ hàm, và mỗi hàm trong đó sẽ được gọi khi chương trình thoát, nên về lý thuyết ta có thể ép chương trình `exit` để chiếm luồng thực thi. Tuy nhiên, vì RELRO được bật `full` nên những vùng này là `read-only`, nên ta sẽ loại trừ phương án này.
 
-- Ta có thể target `heap`, tuy vậy, vì `heap` không chứa con trỏ hay dữ liệu nhạy cảm gì cả,... nên ta cũng sẽ bỏ qua hướng này.
+- Ta cũng có thể target `heap`, nhưng trong layout của bài này thì heap không chứa con trỏ hay dữ liệu nào đủ mạnh để biến arbitrary write thành code execution một cách trực tiếp, nên ta cũng bỏ qua hướng này.
 
-- Ta có libc leak, nên ta có thể access vào những địa chỉ quan trọng của libc, hai thứ ta nghĩ ngay đầu tiên là `__exit_funcs` và `tls_dtors`, là 1 danh sách hàm cleanup sẽ được gọi khi thoát chương trình, tuy nhiên, vì Pointer Guard, nên các địa chỉ này là không ổn định/bị xáo trộn qua mỗi lần, nên ta sẽ loại hướng này.
+- Ta có libc leak, nên ta có thể access vào những địa chỉ quan trọng của libc. Hai thứ dễ nghĩ tới là `__exit_funcs` và `tls_dtors`, là các danh sách hàm cleanup sẽ được gọi khi thoát chương trình. Tuy nhiên, vì Pointer Guard / pointer mangling, nên đây không phải hướng ổn định nhất cho bài này.
 
-- Tuy vậy, ta vẫn có thể target được 1 mục tiêu rất đặc thù của allocator, đó là `__malloc_hook`(là một fp*, nên thường được ưu tiên trong exploitation) và vì ta có libc leak, nên ta có thể biết được địa chỉ của `__malloc_hook`. Từ đó, ghi đè vào đó 1 lệnh nguy hiểm như `system`, khi lần tới malloc được gọi, nó sẽ gọi hook và vì nó là 1 fp*, nó sẽ thực thi lệnh của ta đã chuẩn bị sẵn.
+- Tuy vậy, ta vẫn có thể target được 1 mục tiêu rất đặc thù của allocator, đó là `__malloc_hook`. Đây là 1 function pointer, và vì ta có libc leak nên ta biết được địa chỉ của `__malloc_hook`. Từ đó, nếu ghi đè nó bằng `system`, thì lần tới `malloc` được gọi, hook này sẽ chạy thay cho luồng bình thường.
 
-- Vậy giờ hướng đi đã rõ, trước hết, ta sẽ `malloc(24, b"Y"*24 + p64(0xffffffffffffffff))` để ghi đè top chunk thành 1 giá trị cực lớn.
+- Vậy giờ hướng đi đã rõ: trước hết, ta sẽ `malloc(24, b"Y"*24 + p64(0xffffffffffffffff))` để ghi đè top chunk thành 1 giá trị cực lớn.
 
-- sau đó, ta `malloc` để thu hẹp khoảng cách từ chunk tiếp theo(là top chunk) đến địa chỉ cần ghi đè trừ cho 0x20, để lần sau `malloc(0x20, data)` sẽ ghi đè `__malloc_hook`
+- Sau đó, ta `malloc` 1 chunk rất lớn để thu hẹp khoảng cách từ top chunk hiện tại tới `__malloc_hook - 0x20`, để lần `malloc(24, data)` kế tiếp sẽ overlap với `__malloc_hook`.
 
-- Tiếp đó, ta ghi đè hook với `system`. Vì vậy, lần tới ta gọi `__malloc_hook` thì nó sẽ gọi `system()` và vì đây là 1 fp*, nên nó sẽ nhận tham số của hook, ta sẽ truyền địa chỉ của chuỗi "/bin/sh" trong libc.
+- Tiếp đó, ta ghi đè hook bằng `system`. Vì `__malloc_hook` nhận đối số chính là size truyền vào `malloc`, nên lần tới ta chỉ cần gọi `malloc(addr_of_binsh, b"")` là đủ để biến nó thành `system("/bin/sh")`.
 
-payload cuối cùng:
+- Payload cuối cùng:
 
 ```python
 # Request a chunk; overflow its user data and overwrite the top chunk's size field with a large value.
@@ -177,5 +169,3 @@ malloc(next(libc.search(b"/bin/sh")), b"")
 # Alternatively, call malloc() with the address of a "/bin/sh" string on the heap as its argument.
 #malloc(heap + 0x10, b"")
 ```
-
-

