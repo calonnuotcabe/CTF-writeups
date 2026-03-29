@@ -41,7 +41,8 @@ Trong bài viết này, mình sẽ giải thích những vấn đề bao gồm:
         }
     }
 ```
-
+fastbins check:
+fastbins không check:
 
 ### Bug Class - Heap OverFlow
 
