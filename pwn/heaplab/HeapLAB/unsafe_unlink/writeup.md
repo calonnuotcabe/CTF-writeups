@@ -64,11 +64,6 @@
 
 - Có thể thấy, vì chương trình đã không được compile vs NX, nên ta có thể inject shellcode của chúng ta vào và ép chương trình execute shellcode đó.
 
-### Và cách chúng ta khai thác binary 1 cách cụ thể?
-
-- I/O cơ bản của chương trình:
-     - 
-
 ### Solve Code:
 
 ```python
