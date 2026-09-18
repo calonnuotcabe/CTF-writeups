@@ -16,13 +16,15 @@ Trong bài viết này, mình sẽ giải thích những vấn đề bao gồm:
 
 #### I. Fastbins là gì
 
-- Fastbins là 1 bins 
+- Fastbins là 1 bins single-linked, chuyên dùng để quản lý các chunk 
 
 #### II. Behavior bình thường của fastbin
 - Trước hết, ta sẽ xem cách chương trình này hoạt động 1 cách bình thường:
 
 - Khi free, ta có thể thấy, 1 phần user-data của những chunk free được reuse để làm pointer của fastbins theo nguyên tắc LIFO:
+
 ![alt text](image-6.png)
+
 - Và vì đây là 1 pointer, ta có thể khai thác bằng cách ghi đè pointer bằng 1 địa chỉ mà ta muốn kiểm soát, từ đó, sử dụng cơ chế single-list của fastbins để thay đổi luồng của chương trình
 ### Fastbins(2.30-no-tcache) check những gì và bài này đã lợi dụng việc fastbins không check gì?
 - I/O cơ bản của chương trình:
@@ -43,7 +45,7 @@ Lần này, ta thử lại primitive top chunk corruption, nhưng lần này, ch
 
 
 ### Primitive Discovery
-- Trước hết, ta sẽ chứng minh rằng lỗi double-free này có thể được chuyển thành 1 primitive mạnh, ở đây, là chuyển thành arbitary write primitive. Vậy nên, ta sẽ tìm cách ghi đè giá trị target 
+- Trước hết, ta sẽ chứng minh rằng lỗi double-free này có thể được chuyển thành 1 primitive mạnh, ở đây, là chuyển thành arbitary write primitive. Vậy nên, ta sẽ tìm cách ghi đè giá trị target tại `0x602010`
 - Đầu tiên, ta sẽ `malloc` 2 chunk,  sau đó trigger lỗi double free:
 ```
 chunk_A = malloc(0x20, b"huhu")
@@ -59,6 +61,10 @@ khi đó, fastbins list sẽ:
 ![alt text](image-7.png)
 
 Vậy nếu lần này ta `malloc` 1 lần nữa, ta sẽ sử dụng chunk có metadata tại `0x603000` và sử dụng meta-data + 0x10 làm user-data, tuy nhiên, là vì chunk tại `0x603000` vẫn có ở trong fastbins nên user-data ta ghi vào sẽ được dùng làm con trỏ.
+
+
+
+Vì vậy khi ta `malloc` chunk ở trên cùng fastbins, cũng là cái chunk đã bị double free, ta sẽ được `malloc` dùng `chunk_A
 
 ![alt text](image-5.png)
 

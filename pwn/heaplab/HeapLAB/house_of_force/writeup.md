@@ -125,7 +125,7 @@ malloc(24, b"Much win")
 
 - Vậy làm sao để ta có thể sử dụng cái primitive này để khai thác chương trình?
 
-=> Ta phải dùng primitive này để ghi đè vào 1 địa chỉ quan trọng trong chương trình, từ đó thay đổi CFG theo ý chúng ta. Tuy vậy, ta nên ghi đè vào giá trị nào?
+ => Ta phải dùng primitive này để ghi đè vào 1 địa chỉ quan trọng trong chương trình, từ đó thay đổi CFG theo ý chúng ta. Tuy vậy, ta nên ghi đè vào giá trị nào?
 
 - Ta có thể ghi đè vào các địa chỉ quan trọng ở stack, và ta nghĩ ngay tới `retaddr` hoặc là các function pointer trên stack. Nhưng vì stack thuộc ASLR region và ta không có leak stack, nên ta sẽ loại trừ phương án này.
 
